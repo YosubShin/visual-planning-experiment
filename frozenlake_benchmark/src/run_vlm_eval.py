@@ -21,6 +21,7 @@ except Exception:  # pragma: no cover - optional dependency
 class EvaluationResult:
     layout: Sequence[str]
     optimal_actions: Sequence[str]
+    optimal_action_sequences: Sequence[Sequence[str]]
     predicted_actions: Sequence[str]
     em: float
     pr: float
@@ -104,13 +105,17 @@ def evaluate(
             raise ValueError(f"Unsupported variant: {variant}")
         raw_response = planner.predict(record, prompt)
         predicted_actions = parse_actions(raw_response)
-        em = exact_match(predicted_actions, record["optimal_actions"])
+        optimal_sequences: Sequence[Sequence[str]] = record.get(
+            "optimal_action_sequences", [record["optimal_actions"]]
+        )
+        em = max(exact_match(predicted_actions, seq) for seq in optimal_sequences)
         pr = progress_rate(predicted_actions, record["path_coords"], record["layout"])
         iar = invalid_action_rate(predicted_actions, record["layout"])
         results.append(
             EvaluationResult(
                 layout=record["layout"],
                 optimal_actions=record["optimal_actions"],
+                optimal_action_sequences=optimal_sequences,
                 predicted_actions=predicted_actions,
                 em=em,
                 pr=pr,

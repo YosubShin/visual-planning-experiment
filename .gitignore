@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
 .DS_Store
-frozenlake_benchmark/data/*
+frozenlake_benchmark/data/**
+!frozenlake_benchmark/data/
+!frozenlake_benchmark/data/*.jsonl
 !frozenlake_benchmark/data/.gitkeep
