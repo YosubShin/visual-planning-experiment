@@ -128,6 +128,54 @@ def bfs_shortest_path(layout: Sequence[str], start: GridPosition, goal: GridPosi
     return path
 
 
+def all_shortest_paths(
+    layout: Sequence[str],
+    start: GridPosition,
+    goal: GridPosition,
+) -> List[List[GridPosition]]:
+    """Return all shortest paths from *start* to *goal* (may be empty)."""
+
+    size = len(layout)
+    queue: deque[GridPosition] = deque([start])
+    distances: dict[GridPosition, int] = {start: 0}
+    parents: dict[GridPosition, List[GridPosition]] = {start: []}
+
+    while queue:
+        node = queue.popleft()
+        if node == goal:
+            continue
+        for action in Action:
+            neighbor = apply_action(node, action, size)
+            if layout[neighbor.row][neighbor.col] == "H":
+                continue
+            new_distance = distances[node] + 1
+            if neighbor not in distances:
+                distances[neighbor] = new_distance
+                parents[neighbor] = [node]
+                queue.append(neighbor)
+            elif new_distance == distances[neighbor]:
+                parents.setdefault(neighbor, [])
+                parents[neighbor].append(node)
+
+    if goal not in distances:
+        return []
+
+    for node, parent_list in parents.items():
+        parents[node] = sorted(parent_list, key=lambda pos: (pos.row, pos.col))
+
+    paths: List[List[GridPosition]] = []
+
+    def backtrack(current: GridPosition, suffix: List[GridPosition]) -> None:
+        if current == start:
+            paths.append([start, *suffix])
+            return
+        for parent in parents.get(current, []):
+            backtrack(parent, [current, *suffix])
+
+    backtrack(goal, [])
+    return paths
+
+
 def actions_from_path(path: Sequence[GridPosition]) -> List[Action]:
     """Transform a path into an action sequence."""
 
@@ -186,6 +234,7 @@ def save_jsonl(records: Sequence[dict], path: Path) -> None:
 __all__ = [
     "Action",
     "GridPosition",
+    "all_shortest_paths",
     "actions_from_path",
     "apply_action",
     "bfs_shortest_path",
