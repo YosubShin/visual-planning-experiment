@@ -1,0 +1,1 @@
+{"dataset": "frozenlake_benchmark/data/test.jsonl", "backend": "transformers", "model": "Qwen/Qwen2.5-VL-3B-Instruct", "variant": "ascii", "limit": 4, "error": "transformers and a working torch installation are required for local inference"}
