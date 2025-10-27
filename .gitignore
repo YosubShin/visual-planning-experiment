@@ -4,4 +4,6 @@ __pycache__/
 frozenlake_benchmark/data/**
 !frozenlake_benchmark/data/
 !frozenlake_benchmark/data/*.jsonl
+!frozenlake_benchmark/data/eval/
+!frozenlake_benchmark/data/eval/*.jsonl
 !frozenlake_benchmark/data/.gitkeep

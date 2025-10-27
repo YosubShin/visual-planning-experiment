@@ -17,6 +17,7 @@ frozenlake_benchmark/
 * Python 3.10+
 * [Pillow](https://pypi.org/project/Pillow/) for rendering PNG grids
 * [huggingface_hub](https://pypi.org/project/huggingface-hub/) for remote inference (optional)
+* [transformers](https://pypi.org/project/transformers/) and [PyTorch](https://pypi.org/project/torch/) for local text-only inference (optional)
 
 Install dependencies via:
 
@@ -33,6 +34,16 @@ Run the generator to produce the train/test splits:
 ```
 
 This command creates `train.jsonl` and `test.jsonl`. Default grid sizes are 3×3 to 6×6 with 1,000 train and 250 test layouts per size (note that extremely small grids have a limited number of unique solvable layouts, so you may need to override counts for those sizes). Command-line flags allow you to customize grid sizes, dataset sizes, hole probability, and random seed. Pass `--save-renderings` if you also want ASCII/PNG dumps in `data/render/` (handy for qualitative inspection, but large and therefore ignored by Git).
+
+To retroactively produce renderings for an existing split, use `render_dataset.py`:
+
+```bash
+python -m frozenlake_benchmark.src.render_dataset \
+  --dataset frozenlake_benchmark/data/test.jsonl \
+  --output-dir frozenlake_benchmark/data/render/test
+```
+
+The helper mirrors the filename convention used by the generator and writes ASCII grids and PNG renderings side-by-side. The output directory is gitignored so you can regenerate it locally without polluting commits.
 
 Use `--train-counts`/`--test-counts` to provide explicit `SIZE:COUNT` overrides when you want the total dataset to follow a specific split. For example, the committed dataset was generated via:
 
@@ -67,7 +78,13 @@ The start (`S`) and goal (`G`) tiles are sampled uniformly across the grid (subj
 
 ## Evaluation
 
-Use `run_vlm_eval.py` to compare models across modalities. The script includes a mock backend (which predicts optimal actions for sanity checks) and a Hugging Face backend for real inference against hosted models:
+Use `run_vlm_eval.py` to compare models across modalities. The script now supports three execution backends:
+
+* `mock` – predicts the optimal plan for each board. Handy for smoke tests.
+* `huggingface` – calls hosted inference endpoints via `huggingface_hub.InferenceClient`.
+* `transformers` – loads a local `transformers` checkpoint (e.g., a downloaded Qwen2.5-VL model) and performs greedy decoding offline.
+
+Example invocations:
 
 ```bash
 # Dry run using the built-in oracle
@@ -82,7 +99,38 @@ HUGGING_FACE_HUB_TOKEN=... ./frozenlake_benchmark/scripts/eval_ascii.sh \
   --limit 10
 ```
 
-Image-only evaluation requires a local VLM runtime. Export the dataset and run in an environment with GPU access to evaluate `Qwen2.5-VL-Instruct-7B` or similar models.
+Image-only evaluation still requires a local VLM runtime. Export the dataset and run in an environment with GPU access to evaluate `Qwen2.5-VL-Instruct-7B` or similar models.
+
+### Offline ASCII evaluation with Qwen2.5-VL
+
+To run the 3B Qwen2.5-VL checkpoint locally:
+
+1. Install the optional dependencies (CPU-only environments need the `+cpu` PyTorch wheels):
+
+   ```bash
+   pip install 'torch==2.2.2+cpu' --index-url https://download.pytorch.org/whl/cpu
+   pip install transformers qwen-vl-utils
+   ```
+
+2. Download the model weights via the Hugging Face CLI (or mirror the files manually if direct access is blocked):
+
+   ```bash
+   huggingface-cli download Qwen/Qwen2.5-VL-3B-Instruct --local-dir ./models/qwen25vl-3b --local-dir-use-symlinks False
+   ```
+
+3. Run evaluation with the `transformers` backend, pointing `--model` at the local directory:
+
+   ```bash
+   python -m frozenlake_benchmark.src.run_vlm_eval \
+     --backend transformers \
+     --model ./models/qwen25vl-3b \
+     --dataset frozenlake_benchmark/data/test.jsonl \
+     --output frozenlake_benchmark/data/eval/qwen25vl_3b_local.jsonl
+   ```
+
+The resulting JSONL summarises exact match, progress rate, and invalid action rate alongside the raw completions for post-hoc analysis.
+
+For quick experiments we also ship a lightweight `sandbox.jsonl` split (8 layouts per grid size). The file is small enough for rapid iteration yet preserves diverse board configurations. Results produced by evaluation scripts can be stored under `frozenlake_benchmark/data/eval/` for tracking progress.
 
 ## Metrics
 

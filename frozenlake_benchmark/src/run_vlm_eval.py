@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
@@ -15,6 +15,14 @@ try:
     from huggingface_hub import InferenceClient
 except Exception:  # pragma: no cover - optional dependency
     InferenceClient = None  # type: ignore
+
+try:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+except Exception:  # pragma: no cover - optional dependency
+    torch = None  # type: ignore
+    AutoModelForCausalLM = None  # type: ignore
+    AutoTokenizer = None  # type: ignore
 
 
 @dataclass
@@ -59,6 +67,69 @@ class HuggingFacePlanner:
                 "and running evaluation in an environment with GPU access."
             )
         raise ValueError(f"Unknown variant: {self.variant}")
+
+
+class TransformersPlanner:
+    """Local planner backed by `transformers` models."""
+
+    def __init__(
+        self,
+        model: str,
+        variant: str,
+        max_new_tokens: int,
+    ) -> None:
+        if AutoModelForCausalLM is None or AutoTokenizer is None or torch is None:
+            raise RuntimeError(
+                "transformers and a working torch installation are required for local inference"
+            )
+        if variant != "ascii":
+            raise NotImplementedError("Local image-based evaluation is not supported.")
+
+        self.variant = variant
+        self.max_new_tokens = max_new_tokens
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+        except Exception as exc:  # pragma: no cover - network/dependency issues
+            raise RuntimeError(
+                f"Failed to load tokenizer for '{model}'. Download the checkpoint locally and provide its path."
+            ) from exc
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model,
+                trust_remote_code=True,
+                torch_dtype=dtype,
+                device_map="auto" if self.device.type == "cuda" else None,
+                low_cpu_mem_usage=True,
+            )
+        except Exception as exc:  # pragma: no cover - network/dependency issues
+            raise RuntimeError(
+                f"Failed to load model weights for '{model}'. Ensure the checkpoint is available locally."
+            ) from exc
+        if self.device.type == "cpu":
+            self.model.to(self.device)
+        self.model.eval()
+
+    def predict(self, record: dict, prompt: str) -> str:
+        messages = [
+            {"role": "system", "content": "You are an expert grid-world planner."},
+            {"role": "user", "content": prompt},
+        ]
+        template = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self.tokenizer(template, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            generated = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+        output_ids = generated[0, inputs["input_ids"].shape[1] :]
+        return self.tokenizer.decode(output_ids, skip_special_tokens=True).strip()
 
 
 PROMPT_TEMPLATE = """You are in a grid world.\nThe symbols are:\nS = start, G = goal, H = hole, F = frozen safe tile.\nYou can move UP, DOWN, LEFT, RIGHT. Avoid holes. Reach the goal.\n\nGrid:\n{grid}\n\nWhat is the sequence of moves from S to G? Respond as a comma-separated list of moves."""
@@ -147,13 +218,28 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--backend",
-        choices=["mock", "huggingface"],
+        choices=["mock", "huggingface", "transformers"],
         default="mock",
-        help="Execution backend. Use 'mock' for local validation or 'huggingface' for remote models.",
+        help=(
+            "Execution backend. Use 'mock' for local validation, 'huggingface' for remote endpoints, "
+            "or 'transformers' for offline checkpoints."
+        ),
     )
     parser.add_argument("--model", default="Qwen/Qwen2.5-Instruct")
     parser.add_argument("--token", default=None)
     parser.add_argument("--limit", type=int, default=32, help="Number of examples to evaluate.")
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=256,
+        help="Number of tokens to generate per sample when using the transformers backend.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional JSONL file to persist the evaluation summary.",
+    )
     return parser.parse_args(argv)
 
 
@@ -165,11 +251,31 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     if args.backend == "mock":
         planner = MockPlanner()
+    elif args.backend == "transformers":
+        planner = TransformersPlanner(
+            model=args.model,
+            variant=args.variant,
+            max_new_tokens=args.max_new_tokens,
+        )
     else:
         planner = HuggingFacePlanner(model=args.model, token=args.token, variant=args.variant)
     results = evaluate(planner, records, args.variant)
     summary = summarize(results)
     print(json.dumps(summary, indent=2))
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "dataset": str(args.dataset),
+            "backend": args.backend,
+            "model": args.model,
+            "variant": args.variant,
+            "limit": args.limit,
+            "summary": summary,
+            "records": [asdict(result) for result in results],
+        }
+        with args.output.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload) + "\n")
 
 
 if __name__ == "__main__":

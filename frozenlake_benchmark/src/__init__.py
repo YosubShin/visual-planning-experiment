@@ -5,6 +5,7 @@ __all__ = [
     "metrics",
     "render_ascii",
     "render_image",
+    "render_dataset",
     "run_vlm_eval",
     "utils",
 ]
