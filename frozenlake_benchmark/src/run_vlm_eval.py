@@ -18,10 +18,17 @@ except Exception:  # pragma: no cover - optional dependency
 
 try:
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoModelForVision2Seq,
+        AutoProcessor,
+        AutoTokenizer,
+    )
 except Exception:  # pragma: no cover - optional dependency
     torch = None  # type: ignore
     AutoModelForCausalLM = None  # type: ignore
+    AutoModelForVision2Seq = None  # type: ignore
+    AutoProcessor = None  # type: ignore
     AutoTokenizer = None  # type: ignore
 
 
@@ -78,36 +85,85 @@ class TransformersPlanner:
         variant: str,
         max_new_tokens: int,
     ) -> None:
-        if AutoModelForCausalLM is None or AutoTokenizer is None or torch is None:
+        if torch is None:
             raise RuntimeError(
                 "transformers and a working torch installation are required for local inference"
             )
+        if AutoModelForCausalLM is None and AutoModelForVision2Seq is None:
+            raise RuntimeError("transformers installation is missing model classes required for inference")
         if variant != "ascii":
             raise NotImplementedError("Local image-based evaluation is not supported.")
 
         self.variant = variant
         self.max_new_tokens = max_new_tokens
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.uses_processor = False
+        self.processor = None
 
         dtype = torch.float16 if self.device.type == "cuda" else torch.float32
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
-        except Exception as exc:  # pragma: no cover - network/dependency issues
-            raise RuntimeError(
-                f"Failed to load tokenizer for '{model}'. Download the checkpoint locally and provide its path."
-            ) from exc
-        try:
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model,
-                trust_remote_code=True,
-                torch_dtype=dtype,
-                device_map="auto" if self.device.type == "cuda" else None,
-                low_cpu_mem_usage=True,
-            )
-        except Exception as exc:  # pragma: no cover - network/dependency issues
-            raise RuntimeError(
-                f"Failed to load model weights for '{model}'. Ensure the checkpoint is available locally."
-            ) from exc
+        self.tokenizer = None
+        tokenizer_exc: Exception | None = None
+        if AutoTokenizer is not None:
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+            except Exception as exc:  # pragma: no cover - network/dependency issues
+                tokenizer_exc = exc
+                self.tokenizer = None
+
+        load_kwargs = dict(
+            trust_remote_code=True,
+            torch_dtype=dtype,
+            device_map="auto" if self.device.type == "cuda" else None,
+            low_cpu_mem_usage=True,
+        )
+        self.model = None
+        last_exc: Exception | None = None
+        if self.tokenizer is not None:
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(model, **load_kwargs)
+            except ValueError as exc:
+                last_exc = exc
+                self.model = None
+            except Exception as exc:  # pragma: no cover - network/dependency issues
+                raise RuntimeError(
+                    f"Failed to load model weights for '{model}'. Ensure the checkpoint is available locally."
+                ) from exc
+        if self.model is None:
+            if AutoModelForVision2Seq is None:
+                source_exc = last_exc or tokenizer_exc
+                raise RuntimeError(
+                    f"Failed to load model weights for '{model}'. Ensure the checkpoint is available locally."
+                ) from source_exc
+            try:
+                from transformers import Qwen2_5_VLForConditionalGeneration
+            except Exception:  # pragma: no cover - optional dependency
+                Qwen2_5_VLForConditionalGeneration = None  # type: ignore[assignment]
+            model_cls = Qwen2_5_VLForConditionalGeneration or AutoModelForVision2Seq
+            try:
+                self.model = model_cls.from_pretrained(model, **load_kwargs)
+            except Exception as exc:  # pragma: no cover - dependency issues
+                raise RuntimeError(
+                    f"Failed to load model weights for '{model}'. Ensure the checkpoint is available locally."
+                ) from exc
+            if AutoProcessor is not None:
+                try:
+                    self.processor = AutoProcessor.from_pretrained(model, trust_remote_code=True)
+                except Exception:
+                    self.processor = None
+                else:
+                    self.uses_processor = True
+            if self.tokenizer is None:
+                if self.processor is not None and hasattr(self.processor, "tokenizer"):
+                    self.tokenizer = self.processor.tokenizer  # type: ignore[assignment]
+                elif tokenizer_exc is not None:
+                    raise RuntimeError(
+                        f"Failed to load tokenizer for '{model}'. Download the checkpoint locally and provide its path."
+                    ) from tokenizer_exc
+                else:
+                    raise RuntimeError(
+                        f"Failed to load tokenizer for '{model}'. Download the checkpoint locally and provide its path."
+                    )
+
         if self.device.type == "cpu":
             self.model.to(self.device)
         self.model.eval()
@@ -117,16 +173,71 @@ class TransformersPlanner:
             {"role": "system", "content": "You are an expert grid-world planner."},
             {"role": "user", "content": prompt},
         ]
-        template = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        template = None
+        use_processor = self.uses_processor and self.processor is not None
+        if use_processor:
+            try:
+                template = self.processor.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+            except Exception:
+                template = None
+
+        if template is None and self.tokenizer is not None:
+            try:
+                template = self.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+            except (AttributeError, ValueError):
+                template = None
+
+        if template is None:
+            # Fallback for models without chat template support.
+            system_prompt = messages[0]["content"]
+            user_prompt = messages[1]["content"]
+            template = f"{system_prompt}\n\n{user_prompt}"
+
+        if use_processor:
+            assert self.processor is not None  # for type-checkers
+            inputs = self.processor(
+                text=[template], padding=True, return_tensors="pt"
+            ).to(self.device)
+            tokenizer_like = self.tokenizer
+            if tokenizer_like is None and hasattr(self.processor, "tokenizer"):
+                tokenizer_like = self.processor.tokenizer  # type: ignore[assignment]
+            pad_token_id = (
+                getattr(tokenizer_like, "eos_token_id", None)
+                if tokenizer_like is not None
+                else None
+            )
+            generate_kwargs = {
+                "max_new_tokens": self.max_new_tokens,
+                "do_sample": False,
+            }
+            if pad_token_id is not None:
+                generate_kwargs["pad_token_id"] = pad_token_id
+            with torch.no_grad():
+                generated = self.model.generate(**inputs, **generate_kwargs)
+            output_ids = generated[:, inputs["input_ids"].shape[1] :]
+            outputs = self.processor.batch_decode(
+                output_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            return outputs[0].strip() if outputs else ""
+
+        if self.tokenizer is None:
+            raise RuntimeError("Tokenizer unavailable for causal language model inference")
         inputs = self.tokenizer(template, return_tensors="pt").to(self.device)
+        pad_token_id = getattr(self.tokenizer, "eos_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
         with torch.no_grad():
             generated = self.model.generate(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
                 do_sample=False,
-                pad_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=pad_token_id,
             )
         output_ids = generated[0, inputs["input_ids"].shape[1] :]
         return self.tokenizer.decode(output_ids, skip_special_tokens=True).strip()
