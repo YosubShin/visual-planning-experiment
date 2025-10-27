@@ -1,0 +1,16 @@
+[project]
+name = "visual-planning-experiment"
+version = "0.1.0"
+description = "Experiments for visual planning on FrozenLake-style benchmarks."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas",
+    "pillow",
+    "huggingface_hub",
+    "transformers",
+    "torch",
+]
+
+[tool.uv]
+package = false

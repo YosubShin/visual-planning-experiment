@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .DS_Store
+.venv/
+.uv/
 frozenlake_benchmark/data/**
 !frozenlake_benchmark/data/
 !frozenlake_benchmark/data/*.jsonl
