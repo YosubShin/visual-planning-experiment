@@ -1,0 +1,17 @@
+project: visual-planning-experiment
+
+default_partition: kill-shared
+
+modules:
+  python: lang/Python/3.11.5-GCCcore-13.2.0
+  cuda: system/CUDA/12.2.0
+
+env_watch:
+  - scripts/setup_env.sh
+  - pyproject.toml
+  - uv.lock
+
+# Add snapshot_excludes if you want to skip directories during submissions
+snapshot_excludes:
+- .venv
+
