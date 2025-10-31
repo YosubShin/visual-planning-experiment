@@ -15,22 +15,31 @@ frozenlake_benchmark/
 ## Requirements
 
 * Python 3.10+
+* [uv](https://docs.astral.sh/uv/) for dependency and virtual environment management
 * [Pillow](https://pypi.org/project/Pillow/) for rendering PNG grids
 * [huggingface_hub](https://pypi.org/project/huggingface-hub/) for remote inference (optional)
 * [transformers](https://pypi.org/project/transformers/) and [PyTorch](https://pypi.org/project/torch/) for local text-only inference (optional)
 
-Install dependencies via:
+Install uv if needed:
 
 ```bash
-pip install pillow huggingface_hub pandas
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+Then create/refresh the project environment and install dependencies:
+
+```bash
+uv sync
+```
+
+`uv sync` creates a `.venv` in the repository. Either activate it (`source .venv/bin/activate`) or prefix commands with `uv run ...` to ensure they use the locked dependencies.
 
 ## Dataset Generation
 
 Run the generator to produce the train/test splits:
 
 ```bash
-./frozenlake_benchmark/scripts/gen_all.sh --output-dir frozenlake_benchmark/data
+uv run ./frozenlake_benchmark/scripts/gen_all.sh --output-dir frozenlake_benchmark/data
 ```
 
 This command creates `train.jsonl` and `test.jsonl`. Default grid sizes are 3×3 to 6×6 with 1,000 train and 250 test layouts per size (note that extremely small grids have a limited number of unique solvable layouts, so you may need to override counts for those sizes). Command-line flags allow you to customize grid sizes, dataset sizes, hole probability, and random seed. Pass `--save-renderings` if you also want ASCII/PNG dumps in `data/render/` (handy for qualitative inspection, but large and therefore ignored by Git).
@@ -38,7 +47,7 @@ This command creates `train.jsonl` and `test.jsonl`. Default grid sizes are 3×3
 To retroactively produce renderings for an existing split, use `render_dataset.py`:
 
 ```bash
-python -m frozenlake_benchmark.src.render_dataset \
+uv run python -m frozenlake_benchmark.src.render_dataset \
   --dataset frozenlake_benchmark/data/test.jsonl \
   --output-dir frozenlake_benchmark/data/render/test
 ```
@@ -48,7 +57,7 @@ The helper mirrors the filename convention used by the generator and writes ASCI
 Use `--train-counts`/`--test-counts` to provide explicit `SIZE:COUNT` overrides when you want the total dataset to follow a specific split. For example, the committed dataset was generated via:
 
 ```bash
-python -m frozenlake_benchmark.src.generate_dataset \
+uv run python -m frozenlake_benchmark.src.generate_dataset \
   --output-dir frozenlake_benchmark/data \
   --train-counts 3:32 4:368 5:300 6:300 \
   --test-counts 3:8 4:92 5:75 6:75
@@ -88,10 +97,10 @@ Example invocations:
 
 ```bash
 # Dry run using the built-in oracle
-./frozenlake_benchmark/scripts/eval_ascii.sh --backend mock --limit 5
+uv run ./frozenlake_benchmark/scripts/eval_ascii.sh --backend mock --limit 5
 
 # Remote evaluation with Hugging Face (requires API token)
-HUGGING_FACE_HUB_TOKEN=... ./frozenlake_benchmark/scripts/eval_ascii.sh \
+HUGGING_FACE_HUB_TOKEN=... uv run ./frozenlake_benchmark/scripts/eval_ascii.sh \
   --backend huggingface \
   --model Qwen/Qwen2.5-Instruct \
   --token "$HUGGING_FACE_HUB_TOKEN" \
@@ -108,8 +117,8 @@ To run the 3B Qwen2.5-VL checkpoint locally:
 1. Install the optional dependencies (CPU-only environments need the `+cpu` PyTorch wheels):
 
    ```bash
-   pip install 'torch==2.2.2+cpu' --index-url https://download.pytorch.org/whl/cpu
-   pip install transformers qwen-vl-utils
+   uv pip install 'torch==2.2.2+cpu' --index-url https://download.pytorch.org/whl/cpu
+   uv pip install transformers qwen-vl-utils
    ```
 
 2. Download the model weights via the Hugging Face CLI (or mirror the files manually if direct access is blocked):
@@ -121,7 +130,7 @@ To run the 3B Qwen2.5-VL checkpoint locally:
 3. Run evaluation with the `transformers` backend, pointing `--model` at the local directory:
 
    ```bash
-   python -m frozenlake_benchmark.src.run_vlm_eval \
+   uv run python -m frozenlake_benchmark.src.run_vlm_eval \
      --backend transformers \
      --model ./models/qwen25vl-3b \
      --dataset frozenlake_benchmark/data/test.jsonl \
