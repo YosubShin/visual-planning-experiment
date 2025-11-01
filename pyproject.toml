@@ -5,11 +5,25 @@ description = "Experiments for visual planning on FrozenLake-style benchmarks."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "pandas",
-    "pillow",
-    "huggingface_hub",
-    "transformers",
-    "torch",
+    "pandas>=2.2.0",
+    "pillow>=10.3.0",
+    "huggingface_hub>=0.23.0",
+    "transformers==4.57.0",
+    "torch==2.6.0",
+]
+
+[project.optional-dependencies]
+qwen = [
+    "accelerate==1.7.0",
+    "deepspeed==0.17.1",
+    "flash-attn==2.7.4.post1",
+    "ninja",
+    "peft==0.17.1",
+    "torchcodec==0.2",
+    "torchaudio==2.6.0",
+    "torchvision==0.21.0",
+    "triton==3.2.0",
+    "wandb",
 ]
 
 [tool.uv]
