@@ -10,9 +10,12 @@ log() {
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Shared uv-managed environment (overridable via KOA_SHARED_ENV); lives outside job snapshots
-SHARED_ENV_DIR="${KOA_SHARED_ENV:-${PROJECT_ROOT}/../envs/uv}"
+SHARED_ENV_DIR="${KOA_SHARED_ENV:-${PROJECT_ROOT}/../.venv}"
 mkdir -p "${SHARED_ENV_DIR}"
 ENV_PYTHON="${SHARED_ENV_DIR}/bin/python"
+
+# Add uv to PATH
+export PATH="${PATH}:~/.local/bin"
 
 # Cache location for environment hashes (used to detect changes between runs)
 ENV_CACHE_DIR="${SHARED_ENV_DIR}/.koa"
@@ -31,6 +34,22 @@ fi
 module purge >/dev/null 2>&1 || true
 module load lang/Python/3.11.5-GCCcore-13.2.0 >/dev/null 2>&1 || true
 module load system/CUDA/12.2.0 >/dev/null 2>&1 || true
+
+# Prefer user-provided CUDA toolchain, fall back to koa_scratch layout
+CUDA_HOME="${KOA_CUDA_HOME:-${HOME}/koa_scratch/cuda-12.4}"
+if [[ -d "${CUDA_HOME}" ]]; then
+  export CUDA_HOME
+  export CUDA_PATH="${CUDA_HOME}"
+  export PATH="${CUDA_HOME}/bin:${PATH}"
+  if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+    export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+  else
+    export LD_LIBRARY_PATH="${CUDA_HOME}/lib64"
+  fi
+  log "Configured CUDA toolchain from ${CUDA_HOME}"
+else
+  log "CUDA toolchain not found at ${CUDA_HOME}; continuing without overriding PATH"
+fi
 
 
 # Prefer python3, fall back to python
@@ -63,13 +82,13 @@ fi
 if [[ "${recreate}" -eq 1 ]]; then
   log "Recreating shared environment at ${SHARED_ENV_DIR}"
   # Ensure uv is available for managing the shared environment
-  if ! "${python_bin}" -m uv --help >/dev/null 2>&1; then
-    "${python_bin}" -m pip install --user --upgrade uv
+  if ! uv --help >/dev/null 2>&1; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
   fi
 
   # (Re)create the uv-managed environment and install dependencies from this repo snapshot
-  "${python_bin}" -m uv venv --python "${python_bin}" "${SHARED_ENV_DIR}"
-  "${python_bin}" -m uv pip install --python "${ENV_PYTHON}" .
+  uv venv --clear "${SHARED_ENV_DIR}"
+  uv pip install .
 
   if [[ -n "${ENV_HASH_SOURCE}" ]]; then
     mkdir -p "${ENV_CACHE_DIR}"
@@ -78,3 +97,27 @@ if [[ "${recreate}" -eq 1 ]]; then
 else
   log "Shared environment already up to date; skipping rebuild"
 fi
+
+if [[ ! -x "${ENV_PYTHON}" ]]; then
+  log "Shared environment interpreter missing at ${ENV_PYTHON}"
+  exit 1
+fi
+
+log "Installing Qwen training/inference dependencies"
+uv pip install --upgrade \
+  --index-url https://download.pytorch.org/whl/cu124 \
+  torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0
+
+uv pip install --upgrade ninja
+uv pip install --upgrade flash-attn==2.7.4.post1 --no-build-isolation
+
+uv pip install --upgrade \
+  accelerate==1.7.0 \
+  deepspeed==0.17.1 \
+  transformers==4.57.0 \
+  triton==3.2.0 \
+  torchcodec==0.2 \
+  peft==0.17.1 \
+  wandb
+
+uv run python -c "import torch, flash_attn; print(torch.__version__); print(flash_attn.__version__)"

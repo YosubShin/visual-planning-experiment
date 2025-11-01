@@ -55,4 +55,8 @@ echo
 
 source "scripts/setup_env.sh"
 
-srun --cpu-bind=cores sleep 60
+srun uv run python -m frozenlake_benchmark.src.run_vlm_eval \
+  --backend transformers \
+  --model ./models/qwen25vl-3b \
+  --dataset frozenlake_benchmark/data/test.jsonl \
+  --output ../results/qwen25vl_3b_local.jsonl
