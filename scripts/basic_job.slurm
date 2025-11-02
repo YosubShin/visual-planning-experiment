@@ -59,4 +59,7 @@ srun uv run python -m frozenlake_benchmark.src.run_vlm_eval \
   --backend transformers \
   --model Qwen/Qwen2.5-VL-7B-Instruct \
   --dataset frozenlake_benchmark/data/test.jsonl \
+  --variant ascii \
+  --limit 1000 \
+  --max-new-tokens 1024 \
   --output ../results/qwen25vl_7b_local.jsonl

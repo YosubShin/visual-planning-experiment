@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, List, Sequence
@@ -243,16 +244,31 @@ class TransformersPlanner:
         return self.tokenizer.decode(output_ids, skip_special_tokens=True).strip()
 
 
-PROMPT_TEMPLATE = """Task : Frozen Lake Shortest Path Planning\nYou are given an image of a grid - based environment . In this\nenvironment :\n- An elf marks the starting position .\n- A gift represents the goal .\n- Some cells contain ice holes that are impassable for the elf .\n- The elf can move in one of four directions only : " up " , " down " , " left\n" , or " right ". Each move transitions the elf by one cell in the\ncorresponding absolute direction . Diagonal movement is not\npermitted .\nYour task is to analyze the image and generate the shortest valid\nsequence of actions that moves the elf from the starting position\nto the goal without stepping into any ice holes .\nProvide your final answer enclosed between < ANSWER > and </ ANSWER > , for\nexample : < ANSWER > right up up </ ANSWER >.\n\nGrid:\n{grid}"""
+PROMPT_TEMPLATE = (
+    "Task: Frozen Lake Shortest Path Planning\n"
+    "You are given an image of a grid-based environment. In this environment:\n"
+    "- An elf marks the starting position (S).\n"
+    "- A gift (G) represents the goal.\n"
+    "- Some cells contain ice holes (H) that are impassable for the elf.\n"
+    '- The elf can move in one of four directions only: "up", "down", "left", or "right". Each move transitions the elf by one cell in the corresponding absolute direction. Diagonal movement is not permitted.\n'
+    "Your task is to analyze the image and generate the shortest valid sequence of actions that moves the elf from the starting position to the goal without stepping into any ice holes.\n"
+    "Provide your final answer enclosed between <ANSWER> and </ANSWER>, for example: <ANSWER> right up up </ANSWER>.\n"
+    "\n"
+    "Grid:\n"
+    "{grid}"
+)
 
 
 def parse_actions(text: str) -> List[str]:
     """Convert a model completion to a list of canonical actions."""
 
-    cleaned = text.replace("->", "").replace("\n", " ")
+    match = re.search(r"<\s*answer\s*>(.*?)<\s*/\s*answer\s*>", text, re.IGNORECASE | re.DOTALL)
+    snippet = match.group(1) if match else text
+
+    cleaned = snippet.replace("->", "").replace("\n", " ")
     cleaned = cleaned.replace("[", "").replace("]", "")
     cleaned = cleaned.replace("(", "").replace(")", "")
-    segments = [segment.strip().upper() for segment in cleaned.split(",")]
+    segments = [segment.strip().lower() for segment in cleaned.split(" ")]
     actions = []
     for segment in segments:
         if not segment:
