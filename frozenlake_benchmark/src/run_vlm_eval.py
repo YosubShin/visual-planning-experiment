@@ -362,7 +362,11 @@ def evaluate(
                 "optimal_action_sequences", [record["optimal_actions"]]
             )
             em = max(exact_match(predicted_actions, seq) for seq in optimal_sequences)
-            pr = progress_rate(predicted_actions, record["path_coords"], record["layout"])
+            pr = progress_rate(
+                predicted_actions,
+                optimal_sequences,
+                record["layout"],
+            )
             iar = invalid_action_rate(predicted_actions, record["layout"])
             results.append(
                 EvaluationResult(

@@ -12,18 +12,24 @@ def exact_match(predicted: Sequence[str], optimal: Sequence[str]) -> float:
     return float(list(predicted) == list(optimal))
 
 
+def _find_start(layout: Sequence[str]) -> GridPosition:
+    for r, row in enumerate(layout):
+        for c, cell in enumerate(row):
+            if cell == "S":
+                return GridPosition(r, c)
+    raise ValueError("Layout is missing a start position")
+
+
 def progress_rate(
     predicted_actions: Iterable[str],
-    optimal_path: Sequence[Sequence[int]],
+    optimal_action_sequences: Sequence[Sequence[str]],
     layout: Sequence[str],
 ) -> float:
-    """Compute the progress rate defined as the overlap with the optimal path."""
+    """Return the ratio of consecutive correct moves along any optimal trajectory."""
 
-    if not optimal_path:
+    if not optimal_action_sequences:
         return 0.0
-    start = GridPosition(*optimal_path[0])
-    optimal_positions = [GridPosition(*coords) for coords in optimal_path]
-
+    start = _find_start(layout)
     pred_actions: list[Action] = []
     for action in predicted_actions:
         try:
@@ -31,15 +37,34 @@ def progress_rate(
         except ValueError:
             break
 
-    visited = positions_from_actions(start, pred_actions, layout)
+    predicted_positions = positions_from_actions(start, pred_actions, layout)[1:]
 
-    overlap = 0
-    for expected, actual in zip(optimal_positions, visited):
-        if expected == actual:
-            overlap += 1
-        else:
-            break
-    return overlap / len(optimal_positions)
+    best_ratio = 0.0
+    for optimal_actions in optimal_action_sequences:
+        optimal_steps: list[Action] = []
+        for action in optimal_actions:
+            try:
+                optimal_steps.append(Action(action))
+            except ValueError:
+                optimal_steps = []
+                break
+
+        if not optimal_steps:
+            continue
+
+        optimal_positions = positions_from_actions(start, optimal_steps, layout)[1:]
+        if not optimal_positions:
+            continue
+
+        prefix = 0
+        for predicted, optimal in zip(predicted_positions, optimal_positions):
+            if predicted != optimal:
+                break
+            prefix += 1
+
+        best_ratio = max(best_ratio, prefix / len(optimal_positions))
+
+    return best_ratio
 
 
 def invalid_action_rate(
@@ -49,16 +74,7 @@ def invalid_action_rate(
     """Compute the fraction of invalid actions in *predicted_actions*."""
 
     size = len(layout)
-    start_coords = None
-    for r, row in enumerate(layout):
-        for c, cell in enumerate(row):
-            if cell == "S":
-                start_coords = GridPosition(r, c)
-                break
-        if start_coords is not None:
-            break
-    if start_coords is None:
-        raise ValueError("Layout is missing a start position")
+    start_coords = _find_start(layout)
 
     current = start_coords
     invalid = 0
