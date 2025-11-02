@@ -62,4 +62,5 @@ srun uv run python -m frozenlake_benchmark.src.run_vlm_eval \
   --variant ascii \
   --limit 1000 \
   --max-new-tokens 1024 \
+  --batch-size 32 \
   --output ../results/qwen25vl_7b_local.jsonl

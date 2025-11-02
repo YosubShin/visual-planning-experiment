@@ -8,6 +8,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - optional dependency
+    tqdm = None  # type: ignore
+
 from .metrics import exact_match, invalid_action_rate, progress_rate
 from .render_ascii import ascii_board
 
@@ -51,6 +56,9 @@ class MockPlanner:
     def predict(self, record: dict, *_: object) -> str:
         return ", ".join(record["optimal_actions"])
 
+    def predict_batch(self, records: Sequence[dict], prompts: Sequence[str]) -> List[str]:
+        return [self.predict(record, prompt) for record, prompt in zip(records, prompts)]
+
 
 class HuggingFacePlanner:
     """Wrapper around Hugging Face inference endpoints."""
@@ -75,6 +83,12 @@ class HuggingFacePlanner:
                 "and running evaluation in an environment with GPU access."
             )
         raise ValueError(f"Unknown variant: {self.variant}")
+
+    def predict_batch(self, records: Sequence[dict], prompts: Sequence[str]) -> List[str]:
+        results: List[str] = []
+        for record, prompt in zip(records, prompts):
+            results.append(self.predict(record, prompt))
+        return results
 
 
 class TransformersPlanner:
@@ -169,14 +183,13 @@ class TransformersPlanner:
             self.model.to(self.device)
         self.model.eval()
 
-    def predict(self, record: dict, prompt: str) -> str:
+    def _format_prompt(self, prompt: str) -> str:
         messages = [
             {"role": "system", "content": "You are an expert grid-world planner."},
             {"role": "user", "content": prompt},
         ]
         template = None
-        use_processor = self.uses_processor and self.processor is not None
-        if use_processor:
+        if self.uses_processor and self.processor is not None:
             try:
                 template = self.processor.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=True
@@ -193,15 +206,19 @@ class TransformersPlanner:
                 template = None
 
         if template is None:
-            # Fallback for models without chat template support.
             system_prompt = messages[0]["content"]
             user_prompt = messages[1]["content"]
             template = f"{system_prompt}\n\n{user_prompt}"
+        return template
+
+    def predict_batch(self, records: Sequence[dict], prompts: Sequence[str]) -> List[str]:
+        templates = [self._format_prompt(prompt) for prompt in prompts]
+        use_processor = self.uses_processor and self.processor is not None
 
         if use_processor:
             assert self.processor is not None  # for type-checkers
             inputs = self.processor(
-                text=[template], padding=True, return_tensors="pt"
+                text=templates, padding=True, return_tensors="pt"
             ).to(self.device)
             tokenizer_like = self.tokenizer
             if tokenizer_like is None and hasattr(self.processor, "tokenizer"):
@@ -219,17 +236,23 @@ class TransformersPlanner:
                 generate_kwargs["pad_token_id"] = pad_token_id
             with torch.no_grad():
                 generated = self.model.generate(**inputs, **generate_kwargs)
-            output_ids = generated[:, inputs["input_ids"].shape[1] :]
-            outputs = self.processor.batch_decode(
-                output_ids,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
-            )
-            return outputs[0].strip() if outputs else ""
+            input_lengths = inputs["attention_mask"].sum(dim=1)
+            outputs: List[str] = []
+            for idx in range(generated.size(0)):
+                start = int(input_lengths[idx].item())
+                token_ids = generated[idx, start:].tolist()
+                decoded = self.processor.batch_decode(
+                    [token_ids],
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )[0]
+                outputs.append(decoded.strip())
+            return outputs
 
         if self.tokenizer is None:
             raise RuntimeError("Tokenizer unavailable for causal language model inference")
-        inputs = self.tokenizer(template, return_tensors="pt").to(self.device)
+
+        inputs = self.tokenizer(templates, padding=True, return_tensors="pt").to(self.device)
         pad_token_id = getattr(self.tokenizer, "eos_token_id", None)
         if pad_token_id is None:
             pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
@@ -240,8 +263,19 @@ class TransformersPlanner:
                 do_sample=False,
                 pad_token_id=pad_token_id,
             )
-        output_ids = generated[0, inputs["input_ids"].shape[1] :]
-        return self.tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+        input_lengths = inputs["attention_mask"].sum(dim=1)
+        outputs: List[str] = []
+        for idx in range(generated.size(0)):
+            start = int(input_lengths[idx].item())
+            token_ids = generated[idx, start:].tolist()
+            outputs.append(
+                self.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
+            )
+        return outputs
+
+    def predict(self, record: dict, prompt: str) -> str:
+        outputs = self.predict_batch([record], [prompt])
+        return outputs[0] if outputs else ""
 
 
 PROMPT_TEMPLATE = (
@@ -268,7 +302,7 @@ def parse_actions(text: str) -> List[str]:
     cleaned = snippet.replace("->", "").replace("\n", " ")
     cleaned = cleaned.replace("[", "").replace("]", "")
     cleaned = cleaned.replace("(", "").replace(")", "")
-    segments = [segment.strip().lower() for segment in cleaned.split(" ")]
+    segments = [segment.strip().lower() for segment in re.split(r"[,\s]+", cleaned)]
     actions = []
     for segment in segments:
         if not segment:
@@ -289,38 +323,65 @@ def load_records(path: Path) -> List[dict]:
 
 
 def evaluate(
-    planner: MockPlanner | HuggingFacePlanner,
+    planner: MockPlanner | HuggingFacePlanner | TransformersPlanner,
     records: Sequence[dict],
     variant: str,
+    batch_size: int,
 ) -> List[EvaluationResult]:
     results: List[EvaluationResult] = []
-    for record in records:
-        if variant == "ascii":
-            prompt = PROMPT_TEMPLATE.format(grid=ascii_board(record["layout"]))
-        elif variant == "image":
-            prompt = "See attached image."
+    if not records:
+        return results
+
+    effective_batch_size = max(1, batch_size)
+    progress_bar = (
+        tqdm(total=len(records), desc="Evaluating", unit="sample") if tqdm else None
+    )
+
+    for start in range(0, len(records), effective_batch_size):
+        batch = records[start : start + effective_batch_size]
+        prompts: List[str] = []
+        for record in batch:
+            if variant == "ascii":
+                prompts.append(PROMPT_TEMPLATE.format(grid=ascii_board(record["layout"])))
+            elif variant == "image":
+                prompts.append("See attached image.")
+            else:
+                raise ValueError(f"Unsupported variant: {variant}")
+
+        batch_predict = getattr(planner, "predict_batch", None)
+        if callable(batch_predict):
+            raw_responses = batch_predict(batch, prompts)
         else:
-            raise ValueError(f"Unsupported variant: {variant}")
-        raw_response = planner.predict(record, prompt)
-        predicted_actions = parse_actions(raw_response)
-        optimal_sequences: Sequence[Sequence[str]] = record.get(
-            "optimal_action_sequences", [record["optimal_actions"]]
-        )
-        em = max(exact_match(predicted_actions, seq) for seq in optimal_sequences)
-        pr = progress_rate(predicted_actions, record["path_coords"], record["layout"])
-        iar = invalid_action_rate(predicted_actions, record["layout"])
-        results.append(
-            EvaluationResult(
-                layout=record["layout"],
-                optimal_actions=record["optimal_actions"],
-                optimal_action_sequences=optimal_sequences,
-                predicted_actions=predicted_actions,
-                em=em,
-                pr=pr,
-                iar=iar,
-                raw_response=raw_response,
+            raw_responses = [
+                planner.predict(record, prompt) for record, prompt in zip(batch, prompts)
+            ]
+
+        for record, raw_response in zip(batch, raw_responses):
+            predicted_actions = parse_actions(raw_response)
+            optimal_sequences: Sequence[Sequence[str]] = record.get(
+                "optimal_action_sequences", [record["optimal_actions"]]
             )
-        )
+            em = max(exact_match(predicted_actions, seq) for seq in optimal_sequences)
+            pr = progress_rate(predicted_actions, record["path_coords"], record["layout"])
+            iar = invalid_action_rate(predicted_actions, record["layout"])
+            results.append(
+                EvaluationResult(
+                    layout=record["layout"],
+                    optimal_actions=record["optimal_actions"],
+                    optimal_action_sequences=optimal_sequences,
+                    predicted_actions=predicted_actions,
+                    em=em,
+                    pr=pr,
+                    iar=iar,
+                    raw_response=raw_response,
+                )
+            )
+
+        if progress_bar is not None:
+            progress_bar.update(len(batch))
+
+    if progress_bar is not None:
+        progress_bar.close()
     return results
 
 
@@ -362,6 +423,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         help="Number of tokens to generate per sample when using the transformers backend.",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="Number of samples to evaluate per generation call.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -386,7 +453,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         )
     else:
         planner = HuggingFacePlanner(model=args.model, token=args.token, variant=args.variant)
-    results = evaluate(planner, records, args.variant)
+    results = evaluate(planner, records, args.variant, batch_size=args.batch_size)
     summary = summarize(results)
     print(json.dumps(summary, indent=2))
 
