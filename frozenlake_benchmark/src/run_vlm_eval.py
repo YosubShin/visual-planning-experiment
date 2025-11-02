@@ -13,7 +13,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     tqdm = None  # type: ignore
 
-from .metrics import exact_match, invalid_action_rate, progress_rate
+from .metrics import exact_match, invalid_action_rate, progress_rate, empty_prediction_rate
 from .render_ascii import ascii_board
 
 
@@ -47,6 +47,7 @@ class EvaluationResult:
     em: float
     pr: float
     iar: float
+    epr: float
     raw_response: str
 
 
@@ -293,23 +294,36 @@ PROMPT_TEMPLATE = (
 )
 
 
+ACTION_SPAN_RE = re.compile(r"(?:\b(?:up|down|left|right)\b[\s,]*)+", re.IGNORECASE)
+ACTION_TOKEN_RE = re.compile(r"\b(up|down|left|right)\b", re.IGNORECASE)
+ACTION_BLOCK_RE = re.compile(r"<\s*answer\s*>(.*?)<\s*/\s*answer\s*>", re.IGNORECASE | re.DOTALL)
+
+
 def parse_actions(text: str) -> List[str]:
     """Convert a model completion to a list of canonical actions."""
 
-    match = re.search(r"<\s*answer\s*>(.*?)<\s*/\s*answer\s*>", text, re.IGNORECASE | re.DOTALL)
-    snippet = match.group(1) if match else text
+    match = ACTION_BLOCK_RE.search(text)
+    if match is None:
+        return []
+    snippet = match.group(1)
 
-    cleaned = snippet.replace("->", "").replace("\n", " ")
-    cleaned = cleaned.replace("[", "").replace("]", "")
-    cleaned = cleaned.replace("(", "").replace(")", "")
-    segments = [segment.strip().lower() for segment in re.split(r"[,\s]+", cleaned)]
-    actions = []
-    for segment in segments:
-        if not segment:
-            continue
-        token = segment.split()[0]
-        if token in {"up", "down", "left", "right"}:
-            actions.append(token)
+    def _sanitize(fragment: str) -> str:
+        cleaned = fragment.replace("->", " ")
+        cleaned = cleaned.replace("\n", " ")
+        cleaned = cleaned.replace("[", " ")
+        cleaned = cleaned.replace("]", " ")
+        cleaned = cleaned.replace("(", " ")
+        cleaned = cleaned.replace(")", " ")
+        cleaned = cleaned.replace(";", " ")
+        return cleaned
+
+    sanitized = _sanitize(snippet)
+    spans = ACTION_SPAN_RE.findall(sanitized)
+
+    if not spans:
+        return []
+
+    actions = [token.lower() for token in ACTION_TOKEN_RE.findall(spans[-1])]
     return actions
 
 
@@ -368,6 +382,7 @@ def evaluate(
                 record["layout"],
             )
             iar = invalid_action_rate(predicted_actions, record["layout"])
+            epr = empty_prediction_rate(predicted_actions)
             results.append(
                 EvaluationResult(
                     layout=record["layout"],
@@ -377,6 +392,7 @@ def evaluate(
                     em=em,
                     pr=pr,
                     iar=iar,
+                    epr=epr,
                     raw_response=raw_response,
                 )
             )
@@ -391,12 +407,23 @@ def evaluate(
 
 def summarize(results: Sequence[EvaluationResult]) -> dict:
     if not results:
-        return {"exact_match": 0.0, "progress_rate": 0.0, "invalid_action_rate": 0.0}
+        return {
+            "exact_match": 0.0,
+            "progress_rate": 0.0,
+            "invalid_action_rate": 0.0,
+            "empty_prediction_rate": 0.0,
+        }
 
     em = sum(result.em for result in results) / len(results)
     pr = sum(result.pr for result in results) / len(results)
     iar = sum(result.iar for result in results) / len(results)
-    return {"exact_match": em, "progress_rate": pr, "invalid_action_rate": iar}
+    epr = sum(result.epr for result in results) / len(results)
+    return {
+        "exact_match": em,
+        "progress_rate": pr,
+        "invalid_action_rate": iar,
+        "empty_prediction_rate": epr,
+    }
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:

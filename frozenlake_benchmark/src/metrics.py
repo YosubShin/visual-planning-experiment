@@ -99,4 +99,10 @@ def invalid_action_rate(
     return invalid / total if total else 0.0
 
 
-__all__ = ["exact_match", "progress_rate", "invalid_action_rate"]
+def empty_prediction_rate(predicted_actions: Sequence[str]) -> float:
+    """Return ``1.0`` when no actions are predicted, ``0.0`` otherwise."""
+
+    return 1.0 if len(predicted_actions) == 0 else 0.0
+
+
+__all__ = ["exact_match", "progress_rate", "invalid_action_rate", "empty_prediction_rate"]
