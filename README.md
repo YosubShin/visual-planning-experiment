@@ -72,12 +72,12 @@ Each dataset entry includes:
   "hole_prob": 0.2,
   "start": [0, 1],
   "goal": [3, 3],
-  "optimal_actions": ["DOWN", "DOWN", "DOWN", "RIGHT", "RIGHT"],
+  "optimal_actions": ["down", "down", "down", "right", "right"],
   "optimal_action_sequences": [
-    ["DOWN", "DOWN", "DOWN", "RIGHT", "RIGHT"],
-    ["DOWN", "DOWN", "RIGHT", "DOWN", "RIGHT"],
-    ["DOWN", "RIGHT", "DOWN", "DOWN", "RIGHT"],
-    ["RIGHT", "DOWN", "DOWN", "DOWN", "RIGHT"]
+    ["down", "down", "down", "right", "right"],
+    ["down", "down", "right", "down", "right"],
+    ["down", "right", "down", "down", "right"],
+    ["right", "down", "down", "down", "right"]
   ],
   "path_coords": [[0, 1], [1, 1], [2, 1], [3, 1], [3, 2], [3, 3]]
 }

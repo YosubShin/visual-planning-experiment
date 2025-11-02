@@ -243,7 +243,7 @@ class TransformersPlanner:
         return self.tokenizer.decode(output_ids, skip_special_tokens=True).strip()
 
 
-PROMPT_TEMPLATE = """You are in a grid world.\nThe symbols are:\nS = start, G = goal, H = hole, F = frozen safe tile.\nYou can move UP, DOWN, LEFT, RIGHT. Avoid holes. Reach the goal.\n\nGrid:\n{grid}\n\nWhat is the sequence of moves from S to G? Respond as a comma-separated list of moves."""
+PROMPT_TEMPLATE = """Task : Frozen Lake Shortest Path Planning\nYou are given an image of a grid - based environment . In this\nenvironment :\n- An elf marks the starting position .\n- A gift represents the goal .\n- Some cells contain ice holes that are impassable for the elf .\n- The elf can move in one of four directions only : " up " , " down " , " left\n" , or " right ". Each move transitions the elf by one cell in the\ncorresponding absolute direction . Diagonal movement is not\npermitted .\nYour task is to analyze the image and generate the shortest valid\nsequence of actions that moves the elf from the starting position\nto the goal without stepping into any ice holes .\nProvide your final answer enclosed between < ANSWER > and </ ANSWER > , for\nexample : < ANSWER > right up up </ ANSWER >.\n\nGrid:\n{grid}"""
 
 
 def parse_actions(text: str) -> List[str]:
@@ -258,7 +258,7 @@ def parse_actions(text: str) -> List[str]:
         if not segment:
             continue
         token = segment.split()[0]
-        if token in {"UP", "DOWN", "LEFT", "RIGHT"}:
+        if token in {"up", "down", "left", "right"}:
             actions.append(token)
     return actions
 

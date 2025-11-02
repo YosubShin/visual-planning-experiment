@@ -13,10 +13,10 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 class Action(str, Enum):
     """Enumeration of allowed moves in the grid world."""
 
-    UP = "UP"
-    DOWN = "DOWN"
-    LEFT = "LEFT"
-    RIGHT = "RIGHT"
+    UP = "up"
+    DOWN = "down"
+    LEFT = "left"
+    RIGHT = "right"
 
     @property
     def delta(self) -> Tuple[int, int]:
