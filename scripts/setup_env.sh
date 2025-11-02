@@ -33,7 +33,6 @@ fi
 # Load any configured modules (edit these if your project needs different toolchains)
 module purge >/dev/null 2>&1 || true
 module load lang/Python/3.11.5-GCCcore-13.2.0 >/dev/null 2>&1 || true
-module load system/CUDA/12.2.0 >/dev/null 2>&1 || true
 
 # Prefer user-provided CUDA toolchain, fall back to koa_scratch layout
 CUDA_HOME="${KOA_CUDA_HOME:-${HOME}/koa_scratch/cuda-12.4}"
@@ -79,6 +78,7 @@ if [[ "${recreate}" -eq 0 && -n "${ENV_HASH_SOURCE}" ]]; then
   fi
 fi
 
+export UV_PROJECT_ENVIRONMENT="${SHARED_ENV_DIR}"
 if [[ "${recreate}" -eq 1 ]]; then
   log "Recreating shared environment at ${SHARED_ENV_DIR}"
   # Ensure uv is available for managing the shared environment
@@ -88,7 +88,7 @@ if [[ "${recreate}" -eq 1 ]]; then
 
   # (Re)create the uv-managed environment and install dependencies from this repo snapshot
   uv venv --clear "${SHARED_ENV_DIR}"
-  uv pip install .
+  uv sync --extra hpc
 
   if [[ -n "${ENV_HASH_SOURCE}" ]]; then
     mkdir -p "${ENV_CACHE_DIR}"
@@ -102,22 +102,5 @@ if [[ ! -x "${ENV_PYTHON}" ]]; then
   log "Shared environment interpreter missing at ${ENV_PYTHON}"
   exit 1
 fi
-
-log "Installing Qwen training/inference dependencies"
-uv pip install --upgrade \
-  --index-url https://download.pytorch.org/whl/cu124 \
-  torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0
-
-uv pip install --upgrade ninja
-uv pip install --upgrade flash-attn==2.7.4.post1 --no-build-isolation
-
-uv pip install --upgrade \
-  accelerate==1.7.0 \
-  deepspeed==0.17.1 \
-  transformers==4.57.0 \
-  triton==3.2.0 \
-  torchcodec==0.2 \
-  peft==0.17.1 \
-  wandb
 
 uv run python -c "import torch, flash_attn; print(torch.__version__); print(flash_attn.__version__)"

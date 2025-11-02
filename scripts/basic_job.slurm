@@ -4,7 +4,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:nvidia_h200_nvl:1
 
 set -euo pipefail
 
@@ -57,6 +57,6 @@ source "scripts/setup_env.sh"
 
 srun uv run python -m frozenlake_benchmark.src.run_vlm_eval \
   --backend transformers \
-  --model ./models/qwen25vl-3b \
+  --model Qwen/Qwen2.5-VL-7B-Instruct \
   --dataset frozenlake_benchmark/data/test.jsonl \
-  --output ../results/qwen25vl_3b_local.jsonl
+  --output ../results/qwen25vl_7b_local.jsonl

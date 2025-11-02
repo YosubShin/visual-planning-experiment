@@ -29,7 +29,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 Then create/refresh the project environment and install dependencies:
 
 ```bash
-uv sync
+uv sync --extra hpc
 ```
 
 `uv sync` creates a `.venv` in the repository. Either activate it (`source .venv/bin/activate`) or prefix commands with `uv run ...` to ensure they use the locked dependencies.
